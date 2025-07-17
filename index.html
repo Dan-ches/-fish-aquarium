@@ -165,7 +165,8 @@
         idx++;
       }
       // 3. Разбить дно на сектора
-      const sandTopY = Math.floor(canvas.height * 0.8);
+      const sandHeight = Math.floor(canvas.height * 0.25);
+      const sandTopY = canvas.height - sandHeight;
       const sandBottomY = canvas.height;
       const marginY = 18;
       const sectorWidth = canvas.width / decorCount;
@@ -179,8 +180,8 @@
         const baseX = sectorWidth * (i + 0.5);
         const offsetX = (Math.random() - 0.5) * sectorWidth * 0.6;
         const x = baseX + offsetX;
-        // Y — равномерно по всей высоте песчаного дна
-        const yMin = sandTopY - elemHeight * 0.2; // чуть выше песка, чтобы не обрезались
+        // Y — равномерно по всей площади дна, с возможностью выглядывать за песок (25% высоты дна)
+        const yMin = sandTopY - sandHeight * 0.25;
         const yMax = sandBottomY - elemHeight - 4;
         const y = yMin + Math.random() * Math.max(0, yMax - yMin);
         const angle = (Math.random() - 0.5) * 0.3;
@@ -264,8 +265,11 @@
         grad.addColorStop(1, '#7fd0f7');
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img.sand, 0, canvas.height - 100, canvas.width, 100);
-        ctx.drawImage(img.sand_top, 0, canvas.height - 120, canvas.width, 20);
+        // Дно теперь 25% высоты canvas
+        const sandHeight = Math.floor(canvas.height * 0.25);
+        const sandTopY = canvas.height - sandHeight;
+        ctx.drawImage(img.sand, 0, sandTopY, canvas.width, sandHeight);
+        ctx.drawImage(img.sand_top, 0, sandTopY - 20, canvas.width, 20);
       }
 
       function drawBottom() {
