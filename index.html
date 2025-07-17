@@ -143,7 +143,7 @@
       'seaweed_orange_a', 'seaweed_orange_b', 'seaweed_orange_a_outline', 'seaweed_orange_b_outline',
       'seaweed_grass_a', 'seaweed_grass_b', 'seaweed_grass_a_outline', 'seaweed_grass_b_outline',
         'shell'
-      ];
+    ];
       groundAssets = groundAssets.filter(name => !/^terrain_sand_/.test(name));
       // 1. Количество декораций: 15-25
       const decorCount = Math.floor(15 + Math.random() * 11); // 15–25
@@ -578,7 +578,10 @@
               const dist = Math.sqrt(dx*dx + dy*dy);
               if (dist > 2) {
                 const angle = Math.atan2(dy, dx);
-                const step = fish.speed * 1.2;
+                // Рыба двигается медленнее к корму, если недавно ела
+                const timeSinceLastEaten = fish.lastEatenTime ? Date.now() - fish.lastEatenTime : 1000;
+                const speedMultiplier = timeSinceLastEaten < 1000 ? 0.5 : 1.2;
+                const step = fish.speed * speedMultiplier;
                 const maxVerticalStep = 1.5;
                 let nextX = fish.x + Math.cos(angle) * step;
                 let nextY = fish.y + Math.sin(angle) * step;
@@ -593,6 +596,8 @@
               if (dist < (crumb.radius + 20)) {
                 crumb.state = 'eaten';
                 score += 5;
+                // После поедания корма обновляем originalY, чтобы не было рывка
+                fish.originalY = fish.y;
                 // --- Механика роста ---
                 fish.feedCount = (fish.feedCount || 0) + 1;
                 if (fish.feedCount % 3 === 0) {
@@ -615,6 +620,8 @@
                     ellipseY: isEllipse ? bubSize * (0.7 + Math.random() * 0.3) : bubSize
                   });
                 }
+                // Рыба останавливается после поедания корма
+                fish.lastEatenTime = Date.now();
               }
             }
           } else {
@@ -622,9 +629,11 @@
           fish.x += fish.speed * fish.dir;
             if (fish.y < 60) fish.y = 60;
             if (fish.y > canvas.height - 120) fish.y = canvas.height - 120;
-            // Вертикальное синусоидальное движение только для обычных рыб
+            // Плавный возврат к originalY вместо мгновенного
             fish.waveOffset += fish.waveSpeed;
-            fish.y = fish.originalY + Math.sin(fish.waveOffset) * fish.waveAmplitude;
+            const targetY = fish.originalY + Math.sin(fish.waveOffset) * fish.waveAmplitude;
+            const lerp = 0.07; // скорость возврата
+            fish.y += (targetY - fish.y) * lerp;
             // Случайные изменения направления
             fish.directionChangeTimer--;
             if (fish.directionChangeTimer <= 0) {
@@ -788,13 +797,18 @@
           }
         }
         if (!clickedOnFish) {
+          // Ограничиваем количество корма для производительности на ПК
+          const maxFoods = 20;
+          if (foods.filter(f => f.active).length >= maxFoods) {
+            // Удаляем старые корма
+            foods = foods.filter(f => f.active && f.state !== 'eaten');
+          }
           const crumbCount = 3 + Math.floor(Math.random() * 2); // 3-4 крошки
           for (let i = 0; i < crumbCount; i++) {
-            let startY = my - 50;
-            if (startY < 0) startY = 0;
+            // Корм появляется точно в месте клика, а не выше
             const crumb = {
               x: mx + (Math.random() - 0.5) * 20, // больший разброс
-              y: startY + (Math.random() - 0.5) * 10, // небольшой разброс по Y
+              y: my + (Math.random() - 0.5) * 10, // небольшой разброс по Y
               targetY: my + (Math.random() - 0.5) * 30, // вариация цели
               vy: 0.2 + Math.random() * 0.3 + (Math.random() - 0.5) * 0.1, // вариация скорости
               drift: (Math.random() - 0.5) * 0.3, // индивидуальный дрейф
@@ -869,7 +883,7 @@
               isRedFish: type && type.img === 'fish_red',
               isCrowned: isRare,
               isRare: isRare
-            };
+              };
             newFish.baseSize = newFish.size;
             fishArr.splice(i, 1, newFish);
             clickedOnFish = true;
@@ -877,13 +891,18 @@
           }
         }
         if (!clickedOnFish) {
+          // Ограничиваем количество корма для производительности на ПК
+          const maxFoods = 20;
+          if (foods.filter(f => f.active).length >= maxFoods) {
+            // Удаляем старые корма
+            foods = foods.filter(f => f.active && f.state !== 'eaten');
+          }
           const crumbCount = 3 + Math.floor(Math.random() * 2); // 3-4 крошки
           for (let i = 0; i < crumbCount; i++) {
-            let startY = my - 50;
-            if (startY < 0) startY = 0;
+            // Корм появляется точно в месте клика, а не выше
             const crumb = {
               x: mx + (Math.random() - 0.5) * 20, // больший разброс
-              y: startY + (Math.random() - 0.5) * 10, // небольшой разброс по Y
+              y: my + (Math.random() - 0.5) * 10, // небольшой разброс по Y
               targetY: my + (Math.random() - 0.5) * 30, // вариация цели
               vy: 0.2 + Math.random() * 0.3 + (Math.random() - 0.5) * 0.1, // вариация скорости
               drift: (Math.random() - 0.5) * 0.3, // индивидуальный дрейф
@@ -925,6 +944,36 @@
         console.log('Main button clicked');
         // Можно добавить логику действий
     });
+
+    // === Определение мобильного устройства и горизонтальной ориентации ===
+    function isMobileLandscape() {
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      return isMobile && window.innerWidth > window.innerHeight;
+    }
+
+    // === Новый блок: расчет виртуального игрового поля с пропорциями 16:9 только для мобильных в горизонтали ===
+    function getGameArea() {
+      if (!isMobileLandscape()) {
+        // На ПК и в портретном режиме — вся площадь canvas
+        return {gameW: canvas.width, gameH: canvas.height, offsetX: 0, offsetY: 0};
+      }
+      const aspect = 16 / 9;
+      let w = window.innerWidth;
+      let h = window.innerHeight;
+      let gameW, gameH, offsetX, offsetY;
+      if (w / h > aspect) {
+        gameH = h;
+        gameW = h * aspect;
+        offsetX = (w - gameW) / 2;
+        offsetY = 0;
+      } else {
+        gameW = w;
+        gameH = w / aspect;
+        offsetX = 0;
+        offsetY = (h - gameH) / 2;
+      }
+      return {gameW, gameH, offsetX, offsetY};
+    }
   </script>
 </body>
 </html> 
