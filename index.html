@@ -239,7 +239,11 @@
             directionChangeTimer: Math.random() * 300 + 200,
             isRedFish: type.img === 'fish_red',
             isCrowned: isRare, // редкая рыба всегда с короной
-            isRare: isRare
+            isRare: isRare,
+            overfeedCount: 0, // счётчик перекорма после появления короны
+            isExploding: false, // флаг взрыва
+            explosionFragments: [], // фрагменты PNG-рыбы для взрыва
+            wasChasingFood: false // новый флаг: была ли рыба в режиме преследования корма
           });
         }
       });
@@ -247,6 +251,49 @@
       return fishArr;
     }
 
+    // Функция создания фрагментов PNG-рыбы для взрыва
+    function createFishFragments(fish) {
+      const fragments = [];
+      const partsX = 3, partsY = 2; // сетка 3x2 = 6 фрагментов
+
+      // Проверяем, что изображение загружено
+      if (!fish.img || !fish.img.width || !fish.img.height) {
+        console.warn('Fish image not loaded, using fallback');
+        return [];
+      }
+
+      // ВАЖНО: работаем с оригинальными размерами PNG
+      const w = fish.img.width;
+      const h = fish.img.height;
+      const fragmentW = w / partsX;
+      const fragmentH = h / partsY;
+
+      for (let ix = 0; ix < partsX; ix++) {
+        for (let iy = 0; iy < partsY; iy++) {
+          const angle = Math.random() * 2 * Math.PI;
+          const speed = 2 + Math.random() * 3;
+          fragments.push({
+            // Центр фрагмента в мировых координатах
+            x: fish.x - (w * fish.size) / 2 + ix * fragmentW * fish.size + (fragmentW * fish.size) / 2,
+            y: fish.y - (h * fish.size) / 2 + iy * fragmentH * fish.size + (fragmentH * fish.size) / 2,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed - 1,
+            angle: Math.random() * 2 * Math.PI,
+            vangle: (Math.random() - 0.5) * 0.3,
+            alpha: 1,
+            // Координаты фрагмента в исходном PNG
+            sx: ix * fragmentW,
+            sy: iy * fragmentH,
+            sw: fragmentW,
+            sh: fragmentH,
+            // Размеры для отрисовки (с учётом fish.size)
+            dw: fragmentW * fish.size,
+            dh: fragmentH * fish.size
+          });
+        }
+      }
+      return fragments;
+    }
 
 
     let score = 0;
@@ -333,6 +380,11 @@
 
       function drawFish() {
         fishArr.forEach(fish => {
+          // Не рисуем рыбу, если она взрывается
+          if (fish.isExploding) {
+            return;
+          }
+          
           ctx.save();
           ctx.translate(fish.x, fish.y);
           if (fish.dir === -1) {
@@ -374,16 +426,51 @@
             ctx.lineTo(10, -2);
             ctx.lineTo(14, 10);
             ctx.closePath();
-            ctx.fillStyle = fish.isRare ? '#fff6a0' : '#ffd700';
-            ctx.strokeStyle = fish.isRare ? '#ffe066' : '#e5b700';
+            
+            // Цвет короны зависит от перекорма
+            let crownColor, strokeColor, shadowColor;
+            if (fish.isRare) {
+              crownColor = '#fff6a0';
+              strokeColor = '#ffe066';
+              shadowColor = '#fff6a0';
+            } else {
+              // Обычная корона становится краснее при перекорме
+              const redIntensity = Math.min(fish.overfeedCount * 0.3, 0.8);
+              crownColor = `rgb(${255 - redIntensity * 100}, ${215 - redIntensity * 100}, ${0 + redIntensity * 50})`;
+              strokeColor = `rgb(${229 - redIntensity * 100}, ${183 - redIntensity * 100}, ${0 + redIntensity * 50})`;
+              shadowColor = '#fff';
+            }
+            
+            ctx.fillStyle = crownColor;
+            ctx.strokeStyle = strokeColor;
             ctx.lineWidth = 2.5;
-            ctx.shadowColor = fish.isRare ? '#fff6a0' : '#fff';
+            ctx.shadowColor = shadowColor;
             ctx.shadowBlur = fish.isRare ? 16 : 6;
             ctx.fill();
             ctx.stroke();
             ctx.restore();
           }
           ctx.restore();
+        });
+      }
+
+      function drawFishFragments() {
+        fishArr.forEach(fish => {
+          if (fish.isExploding && fish.explosionFragments.length > 0) {
+            fish.explosionFragments.forEach(fragment => {
+              ctx.save();
+              ctx.globalAlpha = fragment.alpha;
+              ctx.translate(fragment.x, fragment.y);
+              ctx.rotate(fragment.angle);
+              // drawImage: источник — оригинальный PNG, назначение — с учётом fish.size
+              ctx.drawImage(
+                fish.img,
+                fragment.sx, fragment.sy, fragment.sw, fragment.sh, // источник
+                -fragment.dw/2, -fragment.dh/2, fragment.dw, fragment.dh // назначение
+              );
+              ctx.restore();
+            });
+          }
         });
       }
 
@@ -523,6 +610,7 @@
         drawBottom();
         drawBubbles();
         drawFish();
+        drawFishFragments(); // Отрисовываем фрагменты взрыва
         drawHUD();
         drawFood();
 
@@ -575,6 +663,7 @@
           
           const pair = targetPairs.find(p => p.fishIdx === idx);
           if (pair && foods.length > 0) {
+            fish.wasChasingFood = true; // устанавливаем флаг преследования
             const crumb = foods[pair.crumbIdx];
             if (crumb.active && crumb.state !== 'eaten') {
               const dx = crumb.x - fish.x;
@@ -600,13 +689,26 @@
               if (dist < (crumb.radius + 20)) {
                 crumb.state = 'eaten';
                 score += 5;
-                // После поедания корма обновляем originalY, чтобы не было рывка
+                // После поедания обновляем originalY на текущий Y, чтобы начать новую волну отсюда
                 fish.originalY = fish.y;
-                // --- Механика роста ---
-                fish.feedCount = (fish.feedCount || 0) + 1;
-                if (fish.feedCount % 3 === 0) {
-                  const maxSize = fish.baseSize * 2;
-                  fish.size = Math.min(fish.size * 1.1, maxSize);
+                
+                // --- Механика перекорма и взрыва ---
+                if (fish.isCrowned) {
+                  // Рыба с короной - увеличиваем счётчик перекорма
+                  fish.overfeedCount = (fish.overfeedCount || 0) + 1;
+                  
+                  // На 4-й кусочек после короны - взрыв!
+                  if (fish.overfeedCount >= 4 && !fish.isExploding) {
+                    fish.isExploding = true;
+                    fish.explosionFragments = createFishFragments(fish);
+                  }
+                } else {
+                  // Обычная рыба - механика роста
+                  fish.feedCount = (fish.feedCount || 0) + 1;
+                  if (fish.feedCount % 3 === 0) {
+                    const maxSize = fish.baseSize * 2;
+                    fish.size = Math.min(fish.size * 1.1, maxSize);
+                  }
                 }
                 // --- Анимация пузырьков при кормлении ---
                 const bubbleCount = Math.round(2 + fish.size * 2); // от 2 до 5
@@ -629,15 +731,23 @@
               }
             }
           } else {
-            // Обычное движение и ограничения по y
-          fish.x += fish.speed * fish.dir;
+            if (fish.wasChasingFood) {
+              // Переход из преследования: обновляем originalY для плавного продолжения
+              fish.originalY = fish.y;
+              fish.wasChasingFood = false;
+            }
+            // Обычное движение и ограничения по y (с ограничением скорости для мобильных)
+            const speedMultiplier = window.innerWidth < 768 ? 0.7 : 1; // Замедляем на мобильных
+            fish.x += fish.speed * fish.dir * speedMultiplier;
             if (fish.y < 60) fish.y = 60;
             if (fish.y > canvas.height - 120) fish.y = canvas.height - 120;
-            // Плавный возврат к originalY вместо мгновенного
+            
+            // Восстанавливаем волнообразное движение
             fish.waveOffset += fish.waveSpeed;
             const targetY = fish.originalY + Math.sin(fish.waveOffset) * fish.waveAmplitude;
             const lerp = 0.07; // скорость возврата
             fish.y += (targetY - fish.y) * lerp;
+            
             // Случайные изменения направления
             fish.directionChangeTimer--;
             if (fish.directionChangeTimer <= 0) {
@@ -683,6 +793,72 @@
             bubble.alpha -= 0.004; // чуть быстрее исчезают
           });
           fish.bubbles = fish.bubbles.filter(b => b.y > 0 && b.alpha > 0.1);
+        });
+
+        // Анимация фрагментов рыбы и замена рыбы (оптимизированная)
+        fishArr.forEach((fish, fishIndex) => {
+          if (fish.isExploding && fish.explosionFragments && fish.explosionFragments.length > 0) {
+            let allGone = true;
+            const fragments = fish.explosionFragments;
+            
+            // Ограничиваем количество обновлений для производительности
+            for (let i = 0; i < fragments.length; i++) {
+              const fragment = fragments[i];
+              fragment.x += fragment.vx;
+              fragment.y += fragment.vy;
+              fragment.vy += 0.15; // гравитация
+              fragment.angle += fragment.vangle;
+              fragment.alpha -= 0.02;
+              if (fragment.alpha > 0.05) allGone = false;
+            }
+            
+            // Удаляем исчезнувшие фрагменты
+            fish.explosionFragments = fish.explosionFragments.filter(f => f.alpha > 0.05);
+            
+            if (allGone) {
+              // Создаём новую рыбу (как при клике)
+              const type = fishTypes.find(t => img[t.img] === fish.img);
+              let newFish;
+              let isRare = false;
+              let fishImg = fish.img;
+              if (!hasRareFish() && Math.random() < 1/20) {
+                isRare = true;
+                fishImg = img['fish_orange'];
+              } else if (type) {
+                fishImg = fish.img;
+              } else {
+                const t = fishTypes[Math.floor(Math.random() * fishTypes.length)];
+                fishImg = img[t.img];
+              }
+              const newY = Math.random() * (canvas.height - 180) + 60;
+              newFish = {
+                img: fishImg,
+                x: Math.random() * (canvas.width - 180) + 90,
+                y: newY,
+                speed: Math.random() * 1.5 + 0.5 + (isRare ? 0.5 : 0),
+                dir: Math.random() > 0.5 ? 1 : -1,
+                size: (Math.random() * 0.5 + 0.7) * (isRare ? 1.18 : 1),
+                baseSize: 0,
+                feedCount: 0,
+                ageTimer: 0,
+                bubbleTimer: Math.random() * 80 + 40,
+                bubbles: [],
+                waveOffset: Math.random() * Math.PI * 2,
+                waveSpeed: Math.random() * 0.02 + 0.01,
+                waveAmplitude: Math.random() * 30 + 20,
+                originalY: newY,
+                directionChangeTimer: Math.random() * 300 + 200,
+                isRedFish: type && type.img === 'fish_red',
+                isCrowned: isRare,
+                isRare: isRare,
+                overfeedCount: 0,
+                isExploding: false,
+                explosionFragments: []
+              };
+              newFish.baseSize = newFish.size;
+              fishArr.splice(fishIndex, 1, newFish);
+            }
+          }
         });
 
         // === Анимация корма ===
@@ -792,7 +968,10 @@
               directionChangeTimer: Math.random() * 300 + 200,
               isRedFish: type && type.img === 'fish_red',
               isCrowned: isRare,
-              isRare: isRare
+              isRare: isRare,
+              overfeedCount: 0,
+              isExploding: false,
+              explosionFragments: []
             };
             newFish.baseSize = newFish.size;
             fishArr.splice(i, 1, newFish);
@@ -886,7 +1065,10 @@
               directionChangeTimer: Math.random() * 300 + 200,
               isRedFish: type && type.img === 'fish_red',
               isCrowned: isRare,
-              isRare: isRare
+              isRare: isRare,
+              overfeedCount: 0,
+              isExploding: false,
+              explosionFragments: []
               };
             newFish.baseSize = newFish.size;
             fishArr.splice(i, 1, newFish);
